@@ -178,6 +178,8 @@ All Monarch tests run on cpu with local procs (RDMA falls back to tcp where ther
 
 ### End-to-end verification
 
+The full results, job ids and findings are in [the e2e report](/developer/monarch-backend-e2e-report).
+
 GRPO on Qwen3-0.6B (FSDP, 10 rollouts of 8 prompts × 4 samples, 512-token responses) on one node with
 two GB300 gpus. Every run finished all 10 train steps and exited 0. Times are averages over steps 2–9.
 
