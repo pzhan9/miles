@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 import miles.utils.workers.cell_operations.ray as cell_operations_ray_mod
+import miles.utils.workers.worker_manager.client as worker_manager_client_mod
 from miles.utils.test_utils.fault_injector.actions.process import (
     ExitProcessAction,
     KillProcessAction,
@@ -166,8 +167,8 @@ class TestRayCellOperationsHasNoInferenceControllerPath:
         """A cached controller handle on the instance is the state the M27 guard needed."""
         fixture = _make_fixture()
 
-        assert list(vars(fixture.operations)) == ["_worker_manager_handle"]
-        assert fixture.operations._worker_manager_handle is fixture.worker_manager
+        assert list(vars(fixture.operations)) == ["_client"]
+        assert fixture.operations._client._handle is fixture.worker_manager
 
     def test_the_removed_trainer_cell_id_prefix_helper_is_gone(self) -> None:
         """Routing by cell-id prefix only existed to keep trainer cells away from the controller."""
@@ -243,7 +244,7 @@ class TestRayCellOperationsFaultHookPayload:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """A silent worker manager must surface as a bounded timeout, not hang the fault caller."""
-        monkeypatch.setattr(cell_operations_ray_mod, "CONTROL_FAULT_HOOK_TIMEOUT_SECONDS", 0.01)
+        monkeypatch.setattr(worker_manager_client_mod, "CONTROL_FAULT_HOOK_TIMEOUT_SECONDS", 0.01)
         fixture = _make_fixture()
         fixture.worker_manager.control_fault_hook.gate = asyncio.Event()
         command = _command(cell_id="engine-0-2")

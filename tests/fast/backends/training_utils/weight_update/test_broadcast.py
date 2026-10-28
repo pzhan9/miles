@@ -86,10 +86,9 @@ class TestConnectRolloutEnginesFromDistributed:
             return group
 
         with (
-            patch(f"{_BROADCAST_MODULE}.ray") as ray_mock,
+            patch(f"{_BROADCAST_MODULE}.get_current_node_ip", return_value="10.0.0.1"),
             patch(f"{_BROADCAST_MODULE}.init_process_group", side_effect=join) as init_process_group,
         ):
-            ray_mock._private.services.get_node_ip_address.return_value = "10.0.0.1"
             result = connect_rollout_engines_from_distributed(
                 "miles-pp_0",
                 engines,
@@ -128,10 +127,9 @@ class TestConnectRolloutEnginesFromDistributed:
     def test_an_engine_that_refuses_the_group_fails_the_connect(self) -> None:
         """The submitted joins are awaited, so a refusing engine surfaces instead of being dropped."""
         with (
-            patch(f"{_BROADCAST_MODULE}.ray") as ray_mock,
+            patch(f"{_BROADCAST_MODULE}.get_current_node_ip", return_value="10.0.0.1"),
             patch(f"{_BROADCAST_MODULE}.init_process_group", return_value=MagicMock(name="nccl_group")),
         ):
-            ray_mock._private.services.get_node_ip_address.return_value = "10.0.0.1"
             with pytest.raises(RuntimeError, match="engine refused the group"):
                 connect_rollout_engines_from_distributed(
                     "miles-pp_0",

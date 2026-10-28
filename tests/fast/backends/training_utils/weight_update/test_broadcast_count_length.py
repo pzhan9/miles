@@ -12,7 +12,7 @@ class TestBroadcastCountLength:
         engines = [_AcceptingEngine(), _AcceptingEngine()]
 
         with (
-            patch(f"{_BROADCAST_MODULE}.ray") as ray,
+            patch(f"{_BROADCAST_MODULE}.get_current_node_ip") as get_current_node_ip,
             patch(f"{_BROADCAST_MODULE}.init_process_group") as init_process_group,
         ):
             with pytest.raises(AssertionError):
@@ -20,5 +20,5 @@ class TestBroadcastCountLength:
                     group_name="miles-pp_0", rollout_engines=engines, engine_gpu_counts=[2]
                 )
 
-        ray._private.services.get_node_ip_address.assert_not_called()
+        get_current_node_ip.assert_not_called()
         init_process_group.assert_not_called()

@@ -77,7 +77,7 @@ class TestMooncakeStoreConfig:
     def test_defaults(self, monkeypatch: pytest.MonkeyPatch):
         """With no kwargs and no env, protocol/metadata/segment sizes use built-in defaults."""
         _clear_mooncake_env(monkeypatch)
-        monkeypatch.setattr(object_store_config, "_local_hostname", lambda: "127.0.0.1")
+        monkeypatch.setattr(object_store_config, "get_current_node_ip", lambda: "127.0.0.1")
         config = object_store_config.compute_mooncake_store_config({}, contribute_segment=True)
         assert config["protocol"] == "rdma"
         assert config["metadata_server"] == "P2PHANDSHAKE"

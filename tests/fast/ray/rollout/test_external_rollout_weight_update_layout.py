@@ -72,7 +72,7 @@ def _connect(*, engine_gpu_counts: list[int]) -> list[dict]:
     async_utils = SimpleNamespace(submit=lambda coro: coro, wait_futures=lambda futures: None)
 
     with (
-        patch(f"{_BROADCAST_MODULE}.ray"),
+        patch(f"{_BROADCAST_MODULE}.get_current_node_ip", return_value="127.0.0.1"),
         patch(f"{_BROADCAST_MODULE}.async_utils", async_utils),
         patch(f"{_BROADCAST_MODULE}.init_process_group"),
     ):
