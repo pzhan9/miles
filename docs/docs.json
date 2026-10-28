@@ -314,6 +314,7 @@
      "developer/architecture",
      "developer/adding-a-sandbox-provider",
      "developer/reconcile-loop",
+     "developer/monarch-backend-design",
      "developer/versions",
      "developer/debug",
      {
