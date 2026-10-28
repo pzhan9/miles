@@ -1,5 +1,5 @@
-import sys
 import platform
+import sys
 
 from setuptools import find_packages, setup
 from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
@@ -68,6 +68,11 @@ setup(
         ],
         "modal": [
             "modal>=1.5.5",
+        ],
+        # --cluster-backend monarch, imported only by runs that pick it; the nightly whose public
+        # actor / proc-mesh / rdma api the backend was written against
+        "monarch": [
+            "torchmonarch>=0.8.0.dev20261028",
         ],
     },
     python_requires=">=3.10",

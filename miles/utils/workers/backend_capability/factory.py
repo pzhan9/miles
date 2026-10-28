@@ -18,3 +18,9 @@ def get_backend_capability(
             return compute_helm_backend_capability(config=static_connections)
         case ClusterBackend.RAY:
             return RayBackendCapability(worker_manager_handle=RayWorkerManager.get_handle())
+        case ClusterBackend.MONARCH:
+            # torchmonarch is an optional dependency, imported only by runs that pick it
+            from miles.utils.workers.monarch.manager import create_monarch_backend_capability
+            from miles.utils.workers.monarch.runtime import installed_manager_handle
+
+            return create_monarch_backend_capability(installed_manager_handle())
