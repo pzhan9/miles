@@ -11,7 +11,8 @@ from tests.fast.train_parallel_config_utils import make_train_parallel_config
 from miles.backends.megatron_utils import megatron_config
 from miles.backends.megatron_utils.megatron_config import resolve_megatron_config
 from miles.ray import placement_group as placement_group_module
-from miles.ray.placement_group import _assert_external_trainer_in_run, _get_placement_group_layout
+from miles.ray.gpu_layout import compute_gpu_layout
+from miles.ray.placement_group import _assert_external_trainer_in_run
 from miles.ray.specs.train import TrainerControllerSpec
 from miles.ray.train.init_request import TrainerControllerInitRequest
 from miles.utils.args.runtime import AllConfig
@@ -58,13 +59,13 @@ class TestTheLayoutOfOneTrainerDeployment:
             megatron_config=encode_megatron_config("a"),
         )
 
-        assert _get_placement_group_layout(args) == (2, 2)
+        assert compute_gpu_layout(args) == (2, 2)
 
     def test_a_whole_run_still_reserves_every_trainer_it_drives(self):
         """An unsplit run carries the whole multi-model config, and its layout must not move."""
         args = _layout_args(use_critic=False, megatron_config=encode_megatron_config("a", "b"))
 
-        assert _get_placement_group_layout(args) == (8, 4)
+        assert compute_gpu_layout(args) == (8, 4)
 
 
 @pytest.mark.parametrize(
@@ -75,41 +76,41 @@ class TestTheLayoutOfOneTrainerDeployment:
     ],
 )
 def test_shared_ppo_counts_actor_bundles_once(colocate, expected):
-    assert _get_placement_group_layout(_layout_args(colocate=colocate)) == expected
+    assert compute_gpu_layout(_layout_args(colocate=colocate)) == expected
 
 
 def test_debug_train_only_counts_actor_bundles_once_and_leaves_the_rollout_entry_empty():
     """No engine is deployed, so every bundle belongs to the trainer and the rollout slice starts past the end."""
-    assert _get_placement_group_layout(_layout_args(debug_train_only=True)) == (2, 2)
+    assert compute_gpu_layout(_layout_args(debug_train_only=True)) == (2, 2)
 
 
 def test_debug_train_only_never_reads_the_rollout_size_it_was_not_given():
     """A train-only run is launched without --rollout-num-gpus, so naming the rollout contribution
     before returning makes every one of them die on None at startup."""
-    assert _get_placement_group_layout(_layout_args(debug_train_only=True, rollout_num_gpus=None)) == (2, 2)
+    assert compute_gpu_layout(_layout_args(debug_train_only=True, rollout_num_gpus=None)) == (2, 2)
 
 
 def test_debug_rollout_only_bundles_the_eval_engines_too():
     """--eval-num-gpus buys engines this run launches, and leaving them out of the group strands them."""
-    assert _get_placement_group_layout(_layout_args(debug_rollout_only=True, eval_num_gpus=3)) == (7, 0)
+    assert compute_gpu_layout(_layout_args(debug_rollout_only=True, eval_num_gpus=3)) == (7, 0)
 
 
 def test_colocate_bundles_the_eval_engines_too():
     """Colocated engines share the trainer's gpus, but the eval engines are extra ones nobody placed."""
-    assert _get_placement_group_layout(_layout_args(colocate=True, eval_num_gpus=3)) == (7, 0)
+    assert compute_gpu_layout(_layout_args(colocate=True, eval_num_gpus=3)) == (7, 0)
 
 
 def test_debug_train_only_reserves_dedicated_eval_bundles_after_actor():
-    assert _get_placement_group_layout(_layout_args(debug_train_only=True, eval_num_gpus=4)) == (6, 2)
+    assert compute_gpu_layout(_layout_args(debug_train_only=True, eval_num_gpus=4)) == (6, 2)
 
 
 def test_external_rollout_only_reserves_no_local_bundles():
-    assert _get_placement_group_layout(_layout_args(debug_rollout_only=True, rollout_external=True)) == (0, 0)
+    assert compute_gpu_layout(_layout_args(debug_rollout_only=True, rollout_external=True)) == (0, 0)
 
 
 def test_external_rollout_reserves_gpus_for_the_trainer_only():
     """External engines run outside ray, so only the trainer's gpus may be bundled."""
-    assert _get_placement_group_layout(_layout_args(rollout_external=True)) == (2, 2)
+    assert compute_gpu_layout(_layout_args(rollout_external=True)) == (2, 2)
 
 
 def _multi_policy_layout_args(num_policies: int, **overrides):
@@ -120,26 +121,26 @@ def _multi_policy_layout_args(num_policies: int, **overrides):
 class TestPlacementGroupLayout:
     def test_every_policy_reserves_a_trainer_slice_of_its_own(self):
         """Sizing the group for one policy lands every policy on the same gpus."""
-        assert _get_placement_group_layout(_multi_policy_layout_args(1)) == (6, 2)
-        assert _get_placement_group_layout(_multi_policy_layout_args(2)) == (8, 4)
-        assert _get_placement_group_layout(_multi_policy_layout_args(3)) == (10, 6)
+        assert compute_gpu_layout(_multi_policy_layout_args(1)) == (6, 2)
+        assert compute_gpu_layout(_multi_policy_layout_args(2)) == (8, 4)
+        assert compute_gpu_layout(_multi_policy_layout_args(3)) == (10, 6)
 
     def test_the_rollout_side_of_the_layout_is_not_multiplied(self):
         """Policies train apart but share one inference fleet, whose size --rollout-num-gpus alone decides."""
-        num_gpus, rollout_offset = _get_placement_group_layout(_multi_policy_layout_args(3))
+        num_gpus, rollout_offset = compute_gpu_layout(_multi_policy_layout_args(3))
 
         assert num_gpus - rollout_offset == 4
 
     def test_the_policy_count_multiplies_the_debug_and_external_layouts_too(self):
         """The flags that zero the rollout side must not also drop the policies out of the trainer side."""
-        assert _get_placement_group_layout(_multi_policy_layout_args(3, debug_train_only=True)) == (6, 6)
-        assert _get_placement_group_layout(_multi_policy_layout_args(3, rollout_external=True)) == (6, 6)
+        assert compute_gpu_layout(_multi_policy_layout_args(3, debug_train_only=True)) == (6, 6)
+        assert compute_gpu_layout(_multi_policy_layout_args(3, rollout_external=True)) == (6, 6)
 
     def test_only_the_actors_are_counted_as_policies(self):
         """An actor and its critic share the actor placement group, so a critic must not widen it."""
         args = _layout_args(megatron_config=encode_megatron_config("a"), use_critic=True)
 
-        assert _get_placement_group_layout(args) == (6, 2)
+        assert compute_gpu_layout(args) == (6, 2)
 
 
 class TestWhichFlagWinsWhenTwoAreSet:
@@ -149,55 +150,55 @@ class TestWhichFlagWinsWhenTwoAreSet:
         """It is the one flag that says there are no engines at all, so nothing below it can add any."""
         args = _layout_args(debug_train_only=True, rollout_external=True, debug_rollout_only=True, colocate=True)
 
-        assert _get_placement_group_layout(args) == (2, 2)
+        assert compute_gpu_layout(args) == (2, 2)
 
     def test_an_external_rollout_outranks_colocation(self):
         """Colocation shares gpus with engines this run does not own, so it has nothing left to share."""
         args = _layout_args(rollout_external=True, colocate=True)
 
-        assert _get_placement_group_layout(args) == (2, 2)
+        assert compute_gpu_layout(args) == (2, 2)
 
     def test_an_external_rollout_that_is_also_rollout_only_reserves_nothing(self):
         """No trainer of ours and no engine of ours leaves an empty group, not a trainer-sized one."""
         args = _layout_args(rollout_external=True, debug_rollout_only=True, colocate=True)
 
-        assert _get_placement_group_layout(args) == (0, 0)
+        assert compute_gpu_layout(args) == (0, 0)
 
     def test_a_rollout_only_run_outranks_colocation(self):
         """There is no trainer to colocate with, so taking the max would size the group off a dead operand."""
         args = _layout_args(debug_rollout_only=True, colocate=True, eval_num_gpus=3)
 
-        assert _get_placement_group_layout(args) == (7, 0)
+        assert compute_gpu_layout(args) == (7, 0)
 
 
 class TestTheLayoutOfASplitDeployment:
     def test_a_trainer_deployment_bundles_the_trainer_gpus_and_leaves_the_rollout_entry_empty(self):
         """This release installs no engine, so a rollout slice over its bundles would hand them out twice."""
-        assert _get_placement_group_layout(_layout_args(deploy_component="trainer")) == (2, 2)
+        assert compute_gpu_layout(_layout_args(deploy_component="trainer")) == (2, 2)
 
     def test_an_inference_deployment_counts_the_eval_engines_too(self):
         """--eval-num-gpus buys engines that live in this release, so its group has to hold them."""
-        assert _get_placement_group_layout(_layout_args(deploy_component="inference", eval_num_gpus=3)) == (7, 0)
+        assert compute_gpu_layout(_layout_args(deploy_component="inference", eval_num_gpus=3)) == (7, 0)
 
     @pytest.mark.parametrize("overrides", [{"debug_train_only": True}, {"rollout_external": True}])
     def test_an_inference_deployment_without_local_engines_bundles_nothing(self, overrides):
         """Neither flag leaves an engine inside ray, and an empty group is what asks the cluster for nothing."""
-        assert _get_placement_group_layout(_layout_args(deploy_component="inference", **overrides)) == (0, 0)
+        assert compute_gpu_layout(_layout_args(deploy_component="inference", **overrides)) == (0, 0)
 
     def test_a_primary_deployment_bundles_nothing(self):
         """It holds no engine and no rank of its own, so every gpu it reserved would sit idle."""
-        assert _get_placement_group_layout(_layout_args(deploy_component="primary")) == (0, 0)
+        assert compute_gpu_layout(_layout_args(deploy_component="primary")) == (0, 0)
 
     @pytest.mark.parametrize("deploy_instance_id", [None, "extra"])
     def test_an_inference_deployment_bundles_the_engine_gpus_alone(self, deploy_instance_id):
         """An engine release carries the same engines the primary would, and never a trainer rank."""
         args = _layout_args(deploy_component="inference", deploy_instance_id=deploy_instance_id)
 
-        assert _get_placement_group_layout(args) == (4, 0)
+        assert compute_gpu_layout(args) == (4, 0)
 
     def test_a_trainer_deployment_of_a_rollout_only_run_bundles_nothing(self):
         """--debug-rollout-only trains nothing, so this release has no rank to place."""
-        assert _get_placement_group_layout(_layout_args(deploy_component="trainer", debug_rollout_only=True)) == (0, 0)
+        assert compute_gpu_layout(_layout_args(deploy_component="trainer", debug_rollout_only=True)) == (0, 0)
 
 
 class _RecordingRolloutExecutor:

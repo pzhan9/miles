@@ -12,7 +12,7 @@ from tests.fast.fixtures.capability_fixtures import FakeBackendCapability
 from tests.fast.fixtures.megatron_config_fixtures import write_megatron_config, write_megatron_config_trainers
 from tests.fast.ray.rollout.conftest import make_args_with_sglang_config
 
-from miles.ray.placement_group import _get_placement_group_layout
+from miles.ray.gpu_layout import compute_gpu_layout
 from miles.ray.specs import train as train_specs
 from miles.ray.specs.entrypoint import SERVE_SPEC_CLASSES
 from miles.ray.specs.train import (
@@ -823,7 +823,7 @@ class TestTrainerConfigs:
         """A slot past the end of the group is a pending bundle nobody ever schedules."""
         megatron_config = write_megatron_config(tmp_path, "alpha", "beta", "gamma")
         args = _make_args(megatron_config=megatron_config, actor_num_nodes=2, actor_num_gpus_per_node=4)
-        _, actor_num_gpus = _get_placement_group_layout(replace_config_values(args, rollout_num_gpus=8))
+        _, actor_num_gpus = compute_gpu_layout(replace_config_values(args, rollout_num_gpus=8))
 
         specs = specs_trainer(args)
 

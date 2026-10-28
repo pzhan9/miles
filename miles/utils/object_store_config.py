@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from miles.utils.misc import get_current_node_ip
+
 MOONCAKE_MASTER_PORT = 50051
 MOONCAKE_MASTER_ADDRESS_KEY = "master_server_address"
 
@@ -75,19 +77,13 @@ def _parse_size(value: Any) -> int:
     return int(text)
 
 
-def _local_hostname() -> str:
-    import ray
-
-    return ray.util.get_node_ip_address()
-
-
 _MOONCAKE_STORE_FIELDS: tuple[_MooncakeStoreField, ...] = (
     _MooncakeStoreField(
         init_kwarg="local_hostname",
         config_key="local_hostname",
         env_var="MOONCAKE_LOCAL_HOSTNAME",
         parse=str,
-        default_factory=lambda: _local_hostname(),
+        default_factory=lambda: get_current_node_ip(),
     ),
     _MooncakeStoreField(
         init_kwarg="metadata_server",

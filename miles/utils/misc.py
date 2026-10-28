@@ -1,11 +1,10 @@
 import asyncio
 import logging
 import os
+import socket
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar
-
-import ray
 
 from miles.utils.function_registry import load_function
 from miles.utils.http_utils import MILES_HOST_IP_ENV, is_port_available
@@ -104,11 +103,21 @@ class SingletonMeta(type):
         SingletonMeta._instances.clear()
 
 
-def get_current_node_ip():
-    address = ray._private.services.get_node_ip_address()
-    # strip ipv6 address
-    address = address.strip("[]")
-    return address
+# Any routable address works: connecting a UDP socket sends nothing, it only makes the kernel pick the interface
+# that routes there, which is the address peers on other nodes reach this one on.
+_ROUTE_PROBE_ADDRS = (("8.8.8.8", 80, socket.AF_INET), ("2001:4860:4860::8888", 80, socket.AF_INET6))
+
+
+def get_current_node_ip() -> str:
+    """The address peers on other nodes reach this node on, the same one Ray reports for it."""
+    for host, port, family in _ROUTE_PROBE_ADDRS:
+        try:
+            with socket.socket(family, socket.SOCK_DGRAM) as sock:
+                sock.connect((host, port))
+                return sock.getsockname()[0]
+        except OSError:
+            continue
+    return socket.gethostbyname(socket.gethostname())
 
 
 MILES_NODE_EXTERNAL_IP_ENV = "MILES_NODE_EXTERNAL_IP"
@@ -154,7 +163,7 @@ def get_gpu_uuids(gpu_ids: list[int]) -> list[str | None]:
         return [None] * len(gpu_ids)
 
 
-def _to_local_gpu_id(physical_gpu_id: int) -> int:
+def to_local_gpu_id(physical_gpu_id: int) -> int:
     cvd = os.environ.get("CUDA_VISIBLE_DEVICES") or os.environ.get("HIP_VISIBLE_DEVICES")
     if not cvd:
         return physical_gpu_id  # no remapping
@@ -187,7 +196,7 @@ class NodeProbeMixin:
 
     @staticmethod
     def _to_local_gpu_ids(*, gpu_ids: list[int]) -> list[int]:
-        return [_to_local_gpu_id(gpu_id) for gpu_id in gpu_ids]
+        return [to_local_gpu_id(gpu_id) for gpu_id in gpu_ids]
 
     @staticmethod
     def _is_port_available(*, port: int) -> bool:

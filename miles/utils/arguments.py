@@ -493,6 +493,33 @@ def _compute_custom_inference_engine_provider_path(args: argparse.Namespace) -> 
 _DEPLOY_INSTANCE_ID_PATTERN = re.compile(DNS_LABEL_PATTERN)
 
 
+def _resolve_backend_without_ray_cluster(args: argparse.Namespace) -> None:
+    cluster_backend = ClusterBackend(args.cluster_backend)
+    if cluster_backend.provides_ray_cluster():
+        return
+
+    flag = f"--cluster-backend {cluster_backend.value}"
+    assert (
+        not args.use_miles_dashboard
+    ), f"--use-miles-dashboard creates a Ray actor, which {flag} has no Ray cluster for"
+    assert (
+        not args.use_distributed_post
+    ), f"--use-distributed-post reads ray.nodes(), which {flag} has no Ray cluster for"
+    assert (
+        args.multi_lora_n_adapters == 0
+    ), f"--multi-lora-n-adapters drives RayWorkerManager, which {flag} does not use"
+    if ObjectStoreBackend(args.object_store_backend) != ObjectStoreBackend.MOONCAKE:
+        logger.info(
+            f"Overriding --object-store-backend {args.object_store_backend} with "
+            f"{ObjectStoreBackend.MOONCAKE.value} under {flag}, which has no Ray object store."
+        )
+        args.object_store_backend = ObjectStoreBackend.MOONCAKE.value
+    if not args.mooncake_store_init_kwargs and DeployComponent(args.deploy_component).deploys_orchestration_script():
+        args.mooncake_store_init_kwargs = (
+            compute_mooncake_init_kwargs_vanilla() | compute_mooncake_init_kwargs_from_env()
+        )
+
+
 def _validate_deploy_component(args: argparse.Namespace) -> None:
     component = DeployComponent(args.deploy_component)
 
@@ -505,12 +532,12 @@ def _validate_deploy_component(args: argparse.Namespace) -> None:
         return
 
     cluster_backend = ClusterBackend(args.cluster_backend)
-    assert cluster_backend is ClusterBackend.KUBERNETES or (
-        cluster_backend is ClusterBackend.RAY and WorkerCommBackend(args.worker_comm_backend) is WorkerCommBackend.RPC
+    assert not cluster_backend.launches_workers_from_driver() or (
+        WorkerCommBackend(args.worker_comm_backend) is WorkerCommBackend.RPC
     ), (
         f"--deploy-component {component.value} needs --cluster-backend {ClusterBackend.KUBERNETES.value}, or "
-        f"{ClusterBackend.RAY.value} with --worker-comm-backend {WorkerCommBackend.RPC.value} and a ray cluster "
-        f"per deployment; got --cluster-backend {args.cluster_backend} --worker-comm-backend "
+        f"a backend whose driver launches its workers with --worker-comm-backend {WorkerCommBackend.RPC.value} "
+        f"and a cluster per deployment; got --cluster-backend {args.cluster_backend} --worker-comm-backend "
         f"{args.worker_comm_backend}"
     )
 
@@ -527,7 +554,7 @@ def _validate_deploy_component(args: argparse.Namespace) -> None:
     if component is DeployComponent.TRAINER:
         _validate_single_deployed_trainer(args)
         assert not (
-            args.debug_rollout_only and cluster_backend is ClusterBackend.RAY
+            args.debug_rollout_only and cluster_backend.launches_workers_from_driver()
         ), f"--debug-rollout-only needs an inference side, which --deploy-component {component.value} has none"
 
     if component is not DeployComponent.INFERENCE:
@@ -1575,29 +1602,7 @@ def miles_validate_args(args):
         cluster_backend=ClusterBackend(args.cluster_backend), requested=args.worker_comm_backend
     ).value
 
-    if ClusterBackend(args.cluster_backend) == ClusterBackend.KUBERNETES:
-        assert (
-            not args.use_miles_dashboard
-        ), "--use-miles-dashboard creates a Ray actor, which --cluster-backend kubernetes has no Ray cluster for"
-        assert (
-            not args.use_distributed_post
-        ), "--use-distributed-post reads ray.nodes(), which --cluster-backend kubernetes has no Ray cluster for"
-        assert (
-            args.multi_lora_n_adapters == 0
-        ), "--multi-lora-n-adapters drives RayWorkerManager, which --cluster-backend kubernetes does not use"
-        if ObjectStoreBackend(args.object_store_backend) != ObjectStoreBackend.MOONCAKE:
-            logger.info(
-                f"Overriding --object-store-backend {args.object_store_backend} with "
-                f"{ObjectStoreBackend.MOONCAKE.value} under --cluster-backend {ClusterBackend.KUBERNETES.value}."
-            )
-            args.object_store_backend = ObjectStoreBackend.MOONCAKE.value
-        if (
-            not args.mooncake_store_init_kwargs
-            and DeployComponent(args.deploy_component).deploys_orchestration_script()
-        ):
-            args.mooncake_store_init_kwargs = (
-                compute_mooncake_init_kwargs_vanilla() | compute_mooncake_init_kwargs_from_env()
-            )
+    _resolve_backend_without_ray_cluster(args)
 
     args.run_uuid = _resolve_run_uuid(args)
 
