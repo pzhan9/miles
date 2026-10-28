@@ -102,7 +102,11 @@ class RolloutRelatedConfig(BaseConfig):
         str,
         Arg(
             choices=tuple(backend.value for backend in ObjectStoreBackend),
-            help="Backend of the object store used to pass data (e.g. rollout data) between processes.",
+            help=(
+                "Backend of the object store used to pass data (e.g. rollout data) between processes. Without a "
+                "Ray cluster `ray` is replaced by `mooncake` under kubernetes and by `monarch_rdma` under monarch, "
+                "which hands data over as Monarch RDMA buffers read straight out of the producing process."
+            ),
         ),
     ] = "ray"
     mooncake_store_init_kwargs: A[
@@ -228,9 +232,11 @@ class RolloutRelatedConfig(BaseConfig):
         str,
         Arg(
             type_parser=None,
-            choices=["broadcast", "broadcast_packed", "p2p", "disk-delta"],
+            choices=["broadcast", "broadcast_packed", "p2p", "disk-delta", "monarch_rdma"],
             help=(
                 "The method to transfer weights to remote rollout engines during update weight. "
+                "'monarch_rdma' (--cluster-backend monarch, one-gpu engines) lets a receiver next to each engine "
+                "pull every bucket from the trainer over Monarch RDMA and import it through CUDA IPC. "
                 "'disk-delta' diffs each sync against a CPU snapshot of the previous one and publishes "
                 "only the changed bytes to --update-weight-disk-dir; each engine's /pull_weights applies "
                 "them into a host-local checkpoint that the engine reloads from."

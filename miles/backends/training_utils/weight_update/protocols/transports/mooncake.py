@@ -1,10 +1,10 @@
 import os
 from typing import Any
 
-import ray
 import torch
 
 from miles.backends.training_utils.weight_update.protocols.transports.remote_shard import RemoteShard
+from miles.utils.misc import get_current_node_ip
 
 
 class MooncakeTransport:
@@ -66,7 +66,7 @@ def _create_transfer_engine() -> Any:
 
     transfer_engine = TransferEngine()
     transfer_engine.initialize(
-        ray._private.services.get_node_ip_address(),
+        get_current_node_ip(),
         "P2PHANDSHAKE",
         os.environ.get("MOONCAKE_PROTOCOL", "rdma"),
         os.environ.get("MOONCAKE_DEVICE", ""),

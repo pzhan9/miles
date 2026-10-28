@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import socket
 from argparse import Namespace
 from typing import NamedTuple
 
@@ -10,6 +9,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from miles.backends.megatron_utils.megatron_config import MegatronTrainerConfig
 from miles.backends.training_utils.checkpoint.tracker import read_checkpoint_tracker_iteration
+from miles.ray.gpu_layout import compute_gpu_layout, node_gpu_sort_key
 from miles.ray.rollout.inference_controller import UpdatableEngines
 from miles.ray.rollout.router_manager import resolve_router_addrs, wait_session_server_ready
 from miles.ray.specs.inference import (
@@ -63,27 +63,6 @@ class InfoActor:
         return ray.util.get_node_ip_address(), ray.get_gpu_ids()[0]
 
 
-def sort_key(x):
-    index, node_identifier, gpu_id = x
-    # Sort by node IP number and then by GPU ID
-    try:
-        # try to parse it as an IP address.
-        ip_address = node_identifier
-        node_ip_parts = list(map(int, ip_address.split(".")))
-    except ValueError:
-        # Try to resolve the hostname to an IP address.
-        try:
-            ip_address = socket.gethostbyname(node_identifier)
-            node_ip_parts = list(map(int, ip_address.split(".")))
-        except (socket.gaierror, TypeError):
-            # Instead, we convert each character of the original identifier string
-            # to its ASCII value. This provides a stable and consistent numerical
-            # representation that allows for sorting.
-            node_ip_parts = [ord(c) for c in node_identifier]
-
-    return (node_ip_parts, gpu_id)
-
-
 class PlacementGroupInfo(NamedTuple):
     pg: PlacementGroup
     pg_reordered_bundle_indices: list[int]
@@ -116,7 +95,7 @@ def _create_placement_group(num_gpus) -> PlacementGroupInfo:
         ray.kill(actor)
 
     bundle_infos = [(i, gpu_ids[i][0], gpu_ids[i][1]) for i in range(num_bundles)]
-    sorted_bundle_infos = sorted(bundle_infos, key=sort_key)
+    sorted_bundle_infos = sorted(bundle_infos, key=node_gpu_sort_key)
     pg_reordered_bundle_indices = [info[0] for info in sorted_bundle_infos]
     # Map from logical index -> physical GPU ID
     pg_reordered_gpu_ids = [gpu_ids[info[0]][1] for info in sorted_bundle_infos]
@@ -131,34 +110,10 @@ def _create_placement_group(num_gpus) -> PlacementGroupInfo:
     return PlacementGroupInfo(pg, pg_reordered_bundle_indices, pg_reordered_gpu_ids)
 
 
-def _get_placement_group_layout(args) -> tuple[int, int]:
-    selector = DeployComponent(args.deploy_component)
-    trainer_num_gpus = _compute_trainer_num_gpus(args) if selector.selects(DeployComponent.TRAINER) else 0
-    if args.debug_train_only:
-        eval_num_gpus = args.eval_num_gpus if selector.selects(DeployComponent.INFERENCE) else 0
-        return trainer_num_gpus + eval_num_gpus, trainer_num_gpus
-
-    rollout_num_gpus = (
-        (args.rollout_num_gpus or 0) + args.eval_num_gpus if selector.selects(DeployComponent.INFERENCE) else 0
-    )
-    if args.rollout_external:
-        return (0, 0) if args.debug_rollout_only else (trainer_num_gpus, trainer_num_gpus)
-    if args.debug_rollout_only:
-        return rollout_num_gpus, 0
-    if args.colocate:
-        return max(trainer_num_gpus, rollout_num_gpus), 0
-    return trainer_num_gpus + rollout_num_gpus, trainer_num_gpus
-
-
-def _compute_trainer_num_gpus(args) -> int:
-    num_policies = len([config for config in compute_trainer_configs(args) if config.role == ACTOR_ROLE])
-    return args.actor_num_nodes * args.actor_num_gpus_per_node * num_policies
-
-
 def create_placement_groups(args) -> dict[str, PlacementGroupInfo]:
     """Create placement groups for actor and rollout engines."""
 
-    num_gpus, rollout_offset = _get_placement_group_layout(args)
+    num_gpus, rollout_offset = compute_gpu_layout(args)
 
     logger.info(f"Creating placement group with {num_gpus} GPUs...")
     pg, actor_pg_reordered_bundle_indices, actor_pg_reordered_gpu_ids = _create_placement_group(num_gpus)

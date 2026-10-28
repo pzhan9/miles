@@ -4,7 +4,6 @@ from collections.abc import Sequence
 from concurrent.futures import Future
 from contextlib import AbstractContextManager, nullcontext
 
-import ray
 import torch
 import torch.distributed as dist
 
@@ -17,6 +16,7 @@ from miles.backends.training_utils.weight_update.rollout_cell_updater import cre
 from miles.utils import async_utils
 from miles.utils.distributed_lock import create_world_ticket_lock
 from miles.utils.distributed_utils import init_process_group
+from miles.utils.misc import get_current_node_ip
 
 
 class UpdateWeightFromDistributed(WeightTransferProtocol):
@@ -99,7 +99,7 @@ def connect_rollout_engines_from_distributed(
     occupies a different number of ranks in the NCCL group.
     """
     assert engine_gpu_counts is not None and len(engine_gpu_counts) == len(rollout_engines)
-    master_address = ray._private.services.get_node_ip_address()
+    master_address = get_current_node_ip()
     with socket.socket() as sock:
         sock.bind(("", 0))
         master_port = sock.getsockname()[1]

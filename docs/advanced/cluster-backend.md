@@ -1,15 +1,44 @@
 ---
-title: Ray and Kubernetes Backend
-description: Run the same training script on Ray, or let Kubernetes schedule every worker of the run.
+title: Ray, Monarch and Kubernetes Backend
+description: Run the same training script on Ray or Monarch, or let Kubernetes schedule every worker of the run.
 ---
-Miles runs a job on one of two cluster backends. Ray is the default and needs no configuration.
-Kubernetes installs the run as a helm release, so the cluster schedules every worker. The training
-script is the same either way.
+Miles runs a job on one of three cluster backends. Ray is the default and needs no configuration.
+Monarch launches every worker from the driver as Monarch processes instead of Ray actors. Kubernetes
+installs the run as a helm release, so the cluster schedules every worker. The training script is the
+same either way.
 
 ## Ray
 
 Ray is the default backend, so `python scripts/run_*.py train` launches a run as is, with nothing to
 configure. Nothing in the Kubernetes chapter below applies to it.
+
+## Monarch
+
+<Warning>
+
+**Status.** Experimental. The design and its phases are in
+[Design: Monarch Cluster Backend](/developer/monarch-backend-design).
+
+</Warning>
+
+Install the optional dependency with `pip install miles[monarch]`, then pass `--cluster-backend monarch`:
+
+```bash
+MILES_SCRIPT_CLUSTER_BACKEND=monarch python scripts/run_qwen3_4b.py train
+```
+
+- **One process mesh per cell.** The driver spawns a worker manager actor, which spawns every cell as one
+  Monarch proc mesh and watches it through Monarch supervision: a cell that loses a process is torn down
+  and reported as not alive, exactly as under Ray.
+- **Gpu placement.** Monarch assigns no gpus, so Miles packs its gpu slots onto hosts in mesh order, as a
+  Ray `PACK` placement group would, and every gpu worker selects the devices it was placed on.
+- **Data plane.** There is no Ray object store, so `--object-store-backend` is forced to `mooncake`, as
+  under Kubernetes; the launcher starts the Mooncake master.
+- **Hosts.** A single-node run spawns everything on the driver's host. A multi-node run starts
+  `python -m miles.utils.workers.monarch.worker_loop --address <proc-addr>` on every host and gives the
+  driver every address, comma separated, in `MILES_MONARCH_WORKERS`.
+- **Not available.** The dashboard, the Prometheus collector, `--use-distributed-post` and multi-LoRA
+  need a Ray cluster and are refused; hot restart is Kubernetes-only.
 
 ## Kubernetes
 

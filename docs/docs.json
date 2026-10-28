@@ -300,6 +300,8 @@
      "developer/architecture",
      "developer/adding-a-sandbox-provider",
      "developer/reconcile-loop",
+     "developer/monarch-backend-design",
+     "developer/monarch-backend-e2e-report",
      "developer/versions",
      "developer/debug",
      {

@@ -201,7 +201,7 @@ def test_transfer_engine_uses_the_receiver_transport_environment(
     sdk = ModuleType("mooncake.engine")
     sdk.TransferEngine = lambda: engine
     monkeypatch.setitem(sys.modules, "mooncake.engine", sdk)
-    monkeypatch.setattr(mooncake_module.ray._private.services, "get_node_ip_address", lambda: "127.0.0.1")
+    monkeypatch.setattr(mooncake_module, "get_current_node_ip", lambda: "127.0.0.1")
     for name, value in (("MOONCAKE_PROTOCOL", protocol), ("MOONCAKE_DEVICE", device)):
         if value is None:
             monkeypatch.delenv(name, raising=False)
