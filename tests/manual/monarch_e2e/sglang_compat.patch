@@ -1,0 +1,12 @@
+--- a/miles/utils/weight_version.py
++++ b/miles/utils/weight_version.py
+@@ -39,7 +39,8 @@
+             _assert_span_weight_version_sane(sample=sample, span=span, what="were generated under")
+         for span in sample.all_prefill_weight_version_spans:
+             _assert_span_weight_version_sane(sample=sample, span=span, what="had their prompt KV computed under")
+-        if args.sglang.common_value("enable_prefill_weight_versions"):
++        # E2E-ENV-SHIM (never committed): stock sglang 0.5.22 has no such server arg; sglang-miles defaults it off
++        if args.sglang.base_args.get("enable_prefill_weight_versions", False):
+             _assert_sample_reports_prefill_weight_versions(sample)
+ 
+ 
