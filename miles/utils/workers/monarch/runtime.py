@@ -133,6 +133,13 @@ class MonarchWorkerActor(Actor):
     async def ping(self) -> bool:
         return True
 
+    @endpoint
+    async def run_in_process(self, fn: Callable[[], Any]) -> Any:
+        """Run a function in this worker's process, next to it: e.g. a receiver that lands data on its gpus."""
+        if inspect.iscoroutinefunction(getattr(fn, "func", fn)):  # config-access-exempt: a partial or a function
+            return await fn()
+        return await asyncio.get_running_loop().run_in_executor(self._launcher_thread, fn)
+
     async def _dispatch(self, method: str, *, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         if (spec := self._specs.get(method)) is not None:
             if self._rpc_executor is None:

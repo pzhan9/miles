@@ -13,6 +13,7 @@ MONARCH_USING_MODULES = {
     "miles/utils/workers/monarch/handles.py": "worker and cell handles that send monarch endpoint calls",
     "miles/utils/workers/monarch/object_store.py": "rollout data handed over as monarch rdma buffers",
     "miles/utils/workers/monarch/hosts.py": "attaching to the worker loops of the run's hosts",
+    "miles/utils/workers/monarch/weight_transfer.py": "weight buckets pulled by the engines over monarch rdma",
     "miles/utils/workers/monarch/worker_loop.py": "the entrypoint that serves one host of a multi-node run",
 }
 

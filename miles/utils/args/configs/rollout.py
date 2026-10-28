@@ -232,9 +232,11 @@ class RolloutRelatedConfig(BaseConfig):
         str,
         Arg(
             type_parser=None,
-            choices=["broadcast", "broadcast_packed", "p2p", "disk-delta"],
+            choices=["broadcast", "broadcast_packed", "p2p", "disk-delta", "monarch_rdma"],
             help=(
                 "The method to transfer weights to remote rollout engines during update weight. "
+                "'monarch_rdma' (--cluster-backend monarch, one-gpu engines) lets a receiver next to each engine "
+                "pull every bucket from the trainer over Monarch RDMA and import it through CUDA IPC. "
                 "'disk-delta' diffs each sync against a CPU snapshot of the previous one and publishes "
                 "only the changed bytes to --update-weight-disk-dir; each engine's /pull_weights applies "
                 "them into a host-local checkpoint that the engine reloads from."

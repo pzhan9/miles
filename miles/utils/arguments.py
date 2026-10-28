@@ -908,8 +908,13 @@ def miles_validate_args(args):
             setattr(args, k, v)
 
     mode = args.update_weight_transfer_mode
-    if mode not in ("broadcast", "broadcast_packed", "p2p", "disk-delta"):
+    if mode not in ("broadcast", "broadcast_packed", "p2p", "disk-delta", "monarch_rdma"):
         raise ValueError(f"Unknown --update-weight-transfer-mode {mode!r}")
+    if mode == "monarch_rdma":
+        assert ClusterBackend(args.cluster_backend) is ClusterBackend.MONARCH, (
+            "--update-weight-transfer-mode monarch_rdma hands buckets over as monarch rdma buffers, which needs "
+            f"--cluster-backend {ClusterBackend.MONARCH.value}"
+        )
     if mode == "broadcast_packed" and (args.train_backend != "megatron" or args.colocate):
         raise ValueError("broadcast_packed requires Megatron non-colocated weight transfer")
     validate_dashboard_args(args)
