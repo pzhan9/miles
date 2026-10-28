@@ -34,7 +34,9 @@ class WorkerLaunch:
     num_gpus: float
     gpu_slots: GpuSlotRef | None
     pin_to_head: bool
-    # Only for a worker the driver calls natively (not over rpc): method -> concurrency group of the worker class.
+    # A served worker the driver calls through the runtime's own actor calls rather than rpc.
+    served_natively: bool = False
+    # Only for a worker served natively: concurrency group -> threads.
     concurrency_groups: dict[str, int] | None = None
 
 
@@ -72,6 +74,10 @@ class WorkerRuntime(abc.ABC):
     @abc.abstractmethod
     def physical_gpu_ids(self, slots: GpuSlotRef) -> list[int]:
         """The physical device index, on its node, of each slot of ``slots``."""
+
+    def cell_native_handle(self, processes: list[WorkerProcess]) -> Any | None:
+        """What reaches every process of one cell in one call of the backend's own, if it has such a call."""
+        return None
 
     @abc.abstractmethod
     def worker_capability_factory(self) -> Callable[[], BackendCapability]:

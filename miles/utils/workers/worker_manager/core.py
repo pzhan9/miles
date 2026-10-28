@@ -150,13 +150,13 @@ class WorkerManager:
         )
         return actor.process.native_handle
 
-    def get_cell_native_handles(self, cell_id: str, *, expected_generation: int) -> list[Any]:
+    def get_cell_native_handle(self, cell_id: str, *, expected_generation: int) -> Any | None:
         cell = self._find_cell(cell_id)
         assert cell.alive and cell.generation == expected_generation, (
             f"{cell_id} is now generation {cell.generation} (alive={cell.alive}), not the {expected_generation} it "
             f"was described as; ask for its cell infos again"
         )
-        return [actor.process.native_handle for actor in cell.actors]
+        return self.runtime.cell_native_handle([actor.process for actor in cell.actors])
 
     def _compute_worker_info(self, actor: _BaseActorManager) -> WorkerInfo:
         served_over_rpc = isinstance(actor.spec, BaseServeSpec) and self.comm_backend == WorkerCommBackend.RPC
@@ -392,7 +392,12 @@ class _BaseActorManager(Generic[SpecT]):
         )
 
     def _compute_launch_of(
-        self, actor_class: type, *, concurrency_groups: dict[str, int] | None = None, **ctor_kwargs
+        self,
+        actor_class: type,
+        *,
+        served_natively: bool = False,
+        concurrency_groups: dict[str, int] | None = None,
+        **ctor_kwargs,
     ) -> WorkerLaunch:
         scheduling = self.spec.scheduling(self.manager.scaling)
         return WorkerLaunch(
@@ -405,6 +410,7 @@ class _BaseActorManager(Generic[SpecT]):
             num_gpus=scheduling.num_gpus_per_worker,
             gpu_slots=self._gpu_slots,
             pin_to_head=scheduling.pin_to_head,
+            served_natively=served_natively,
             concurrency_groups=concurrency_groups,
         )
 
@@ -496,6 +502,7 @@ class _ServeActorNativeCommManager(_BaseActorManager[BaseServeSpec]):
     def compute_launch(self) -> WorkerLaunch:
         return self._compute_launch_of(
             bootstrapped_worker_class(self.spec.worker_class),
+            served_natively=True,
             concurrency_groups=self.spec.concurrency_groups,
             ctor_kwargs=self.spec.ctor_kwargs,
             context=self.launch_context,

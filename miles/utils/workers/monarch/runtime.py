@@ -8,10 +8,12 @@ Every gpu worker sees its whole host, as under Ray, and selects the devices the 
 from __future__ import annotations
 
 import asyncio
+import inspect
 import itertools
 import logging
 import os
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
@@ -20,6 +22,9 @@ from monarch.actor import Actor, HostMesh, ProcMesh, current_rank, default_boots
 
 from miles.utils.misc import get_current_node_ip
 from miles.utils.workers.backend_capability.base import BackendCapability
+from miles.utils.workers.monarch.handles import MonarchCellHandle, MonarchWorkerHandle, call_endpoint
+from miles.utils.workers.rpc.common.metadata import canonicalize_method_arguments, collect_rpc_method_specs
+from miles.utils.workers.rpc.server.executor import RpcCallExecutor
 from miles.utils.workers.worker_manager.runtime import GpuSlotRef, WorkerLaunch, WorkerProcess, WorkerRuntime
 
 logger = logging.getLogger(__name__)
@@ -105,18 +110,47 @@ class MonarchWorkerActor(Actor):
     with a single ``ProcMesh.spawn``.
     """
 
-    def __init__(self, targets: list[tuple[type, dict[str, Any]]], manager: Any) -> None:
+    def __init__(self, targets: list[_WorkerTarget], manager: Any) -> None:
         install_manager_handle(manager)
-        actor_class, ctor_kwargs = targets[current_rank().rank]
-        self._target = actor_class(**ctor_kwargs)
+        target = targets[current_rank().rank]
+        self._target = target.actor_class(**target.ctor_kwargs)
+        # A worker served natively runs each call where its rpc specs put it, exactly as the rpc server would;
+        # the launcher's own verbs (node probes, run, shutdown, ...) run on one thread of their own.
+        self._specs = collect_rpc_method_specs(target.actor_class) if target.served_natively else {}
+        self._rpc_executor: RpcCallExecutor | None = None
+        self._launcher_thread = ThreadPoolExecutor(max_workers=1, thread_name_prefix="monarch-launcher")
 
     @endpoint
-    def invoke(self, method: str, kwargs: dict[str, Any]) -> Any:
-        return getattr(self._target, method)(**kwargs)  # config-access-exempt: attribute selected at runtime
+    async def invoke(self, method: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+        return await self._dispatch(method, args=args, kwargs=kwargs)
 
     @endpoint
-    def ping(self) -> bool:
+    async def invoke_each(self, method: str, kwargs_per_worker: list[dict[str, Any]]) -> Any:
+        """One mesh call reaching the whole cell; every rank takes its own arguments."""
+        return await self._dispatch(method, args=(), kwargs=kwargs_per_worker[current_rank().rank])
+
+    @endpoint
+    async def ping(self) -> bool:
         return True
+
+    async def _dispatch(self, method: str, *, args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
+        if (spec := self._specs.get(method)) is not None:
+            if self._rpc_executor is None:
+                self._rpc_executor = RpcCallExecutor(worker=self._target, specs=self._specs)
+            canonical = canonicalize_method_arguments(spec=spec, args=args, kwargs=kwargs)
+            return await self._rpc_executor.call(spec=spec, kwargs=canonical)
+
+        fn = getattr(self._target, method)  # config-access-exempt: attribute selected at runtime from method
+        if inspect.iscoroutinefunction(fn):
+            return await fn(*args, **kwargs)
+        return await asyncio.get_running_loop().run_in_executor(self._launcher_thread, partial(fn, *args, **kwargs))
+
+
+@dataclass(frozen=True, kw_only=True)
+class _WorkerTarget:
+    actor_class: type
+    ctor_kwargs: dict[str, Any]
+    served_natively: bool
 
 
 # The worker manager of this run, as seen from this process: the driver installs it when it launches the manager,
@@ -180,7 +214,14 @@ class MonarchWorkerRuntime(WorkerRuntime):
         actor_mesh = proc_mesh.spawn(
             mesh_name,
             MonarchWorkerActor,
-            [(launch.actor_class, launch.ctor_kwargs) for launch in launches],
+            [
+                _WorkerTarget(
+                    actor_class=launch.actor_class,
+                    ctor_kwargs=launch.ctor_kwargs,
+                    served_natively=launch.served_natively,
+                )
+                for launch in launches
+            ],
             self._manager,
         )
         cell_mesh = _CellMesh(cell_id=cell_id, proc_mesh=proc_mesh, actor_mesh=actor_mesh)
@@ -189,12 +230,13 @@ class MonarchWorkerRuntime(WorkerRuntime):
         return [
             _MonarchWorkerProcess(
                 cell_mesh=cell_mesh,
+                served_method_names=_served_method_names(launch),
                 actor=actor_mesh.slice(
                     **({} if host_dim is None else {host_dim: index // procs_per_host}),
                     **{_PROCS_DIM: index % procs_per_host},
                 ),
             )
-            for index in range(len(launches))
+            for index, launch in enumerate(launches)
         ]
 
     async def kill_worker(self, process: WorkerProcess) -> None:
@@ -218,6 +260,14 @@ class MonarchWorkerRuntime(WorkerRuntime):
 
     def worker_capability_factory(self) -> Callable[[], BackendCapability]:
         return self._capability_factory
+
+    def cell_native_handle(self, processes: list[WorkerProcess]) -> Any | None:
+        monarch_processes = [process for process in processes if isinstance(process, _MonarchWorkerProcess)]
+        cell_meshes = {process.cell_mesh for process in monarch_processes}
+        if len(cell_meshes) != 1 or not all(process.served_natively for process in monarch_processes):
+            return None
+        [cell_mesh] = cell_meshes
+        return MonarchCellHandle(actor_mesh=cell_mesh.actor_mesh, num_workers=len(monarch_processes))
 
     def cell_id_of_failed_mesh(self, mesh_name: str) -> str | None:
         cell_mesh = self._live_meshes.get(mesh_name)
@@ -254,16 +304,27 @@ def _host_dim_of(host_mesh: HostMesh) -> str | None:
     return labels[0] if labels else None
 
 
+def _served_method_names(launch: WorkerLaunch) -> frozenset[str] | None:
+    if not launch.served_natively:
+        return None
+    return frozenset(collect_rpc_method_specs(launch.actor_class))
+
+
 class _MonarchWorkerProcess(WorkerProcess):
-    def __init__(self, *, cell_mesh: _CellMesh, actor: Any) -> None:
+    def __init__(self, *, cell_mesh: _CellMesh, actor: Any, served_method_names: frozenset[str] | None) -> None:
         self.cell_mesh = cell_mesh
         self._actor = actor
+        self._served_method_names = served_method_names
+
+    @property
+    def served_natively(self) -> bool:
+        return self._served_method_names is not None
 
     async def call(self, method: str, /, **kwargs: Any) -> Any:
-        return await self._actor.invoke.call_one(method, kwargs)
+        return await call_endpoint(self._actor.invoke.call_one(method, (), kwargs), describe=method)
 
     def call_without_result(self, method: str, /, **kwargs: Any) -> None:
-        self._actor.invoke.broadcast(method, kwargs)
+        self._actor.invoke.broadcast(method, (), kwargs)
 
     async def probe_is_dead(self) -> bool:
         if self.cell_mesh.stopped:
@@ -279,7 +340,9 @@ class _MonarchWorkerProcess(WorkerProcess):
 
     @property
     def native_handle(self) -> Any:
-        return self._actor
+        if self._served_method_names is None:
+            return self._actor
+        return MonarchWorkerHandle(actor=self._actor, method_names=self._served_method_names)
 
 
 def make_capability_factory(create: Callable[[Any], BackendCapability]) -> Callable[[], BackendCapability]:

@@ -14,6 +14,7 @@ from functools import partial
 from miles.utils.test_utils.fault_injector.controller import FaultHookCommand
 from miles.utils.test_utils.fault_injector.models import FaultHookRecord, ObservedFaultHookTarget
 from miles.utils.workers.backend_capability.base import BackendCapability
+from miles.utils.workers.cell_handle import BaseCellHandle
 from miles.utils.workers.cell_operations.base import BaseCellOperations
 from miles.utils.workers.polling_reconcile_loop import PollingReconcileLoop
 from miles.utils.workers.worker_handle import BaseWorkerHandle
@@ -55,6 +56,10 @@ class WorkerManagerClient(abc.ABC):
     def get_native_handles_blocking(self, infos: list[WorkerInfo]) -> dict[str, BaseWorkerHandle]:
         """Handles of workers the driver calls through the backend's own actor calls rather than rpc."""
 
+    def get_native_cell_handle_blocking(self, cell_id: str, *, generation: int) -> BaseCellHandle | None:
+        """A handle that reaches a whole cell in one call of the backend's own, if the backend has such a call."""
+        return None
+
 
 class ManagerWorkerProvider(BaseWorkerProvider):
     def __init__(
@@ -91,6 +96,15 @@ class ManagerWorkerProvider(BaseWorkerProvider):
             )
             for info in infos
         }
+
+    def get_cell_handle(
+        self, *, cell_id: str, infos: list[WorkerInfo], worker_handles: list[BaseWorkerHandle]
+    ) -> BaseCellHandle:
+        if infos and all(info.worker_class is None for info in infos):
+            native = self._client.get_native_cell_handle_blocking(cell_id, generation=infos[0].generation)
+            if native is not None:
+                return native
+        return super().get_cell_handle(cell_id=cell_id, infos=infos, worker_handles=worker_handles)
 
     async def watch_cells(self, reconcile: CellReconcileFn) -> StopWatchFn:
         loop = PollingReconcileLoop(
