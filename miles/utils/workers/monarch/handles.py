@@ -71,6 +71,16 @@ class MonarchCellHandle(BaseCellHandle):
         return [value for _, value in sorted(results.items(), key=lambda item: item[0].rank)]
 
 
+def get_endpoint_result(future: Any, *, describe: str) -> Any:
+    """The blocking form of ``call_endpoint``, for code that runs outside any event loop."""
+    try:
+        return future.get()
+    except ActorError as e:
+        raise e.exception from e
+    except SupervisionError as e:
+        raise WorkerUnreachableError(f"Worker died or is unreachable when calling {describe!r}: {e!r}") from e
+
+
 async def call_endpoint(future: Any, *, describe: str) -> Any:
     """Answer what the call answered, raising the worker's own exception the way a Ray actor call does."""
     try:
