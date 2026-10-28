@@ -233,7 +233,12 @@ class MonarchWorkerRuntime(WorkerRuntime):
         )
         cell_mesh = _CellMesh(cell_id=cell_id, proc_mesh=proc_mesh, actor_mesh=actor_mesh)
         self._live_meshes[mesh_name] = cell_mesh
-        await actor_mesh.ping.call()
+        try:
+            await actor_mesh.ping.call()
+        except BaseException:
+            # The core never learns of processes it was not handed, so nobody else would stop this mesh.
+            await self._stop_mesh(cell_mesh)
+            raise
         return [
             _MonarchWorkerProcess(
                 cell_mesh=cell_mesh,
@@ -253,13 +258,16 @@ class MonarchWorkerRuntime(WorkerRuntime):
     async def release_cell(self, *, cell_id: str, processes: list[WorkerProcess]) -> None:
         cell_meshes = {process.cell_mesh for process in processes if isinstance(process, _MonarchWorkerProcess)}
         for cell_mesh in cell_meshes:
-            self._live_meshes = {name: mesh for name, mesh in self._live_meshes.items() if mesh is not cell_mesh}
-            cell_mesh.stopped = True
-            try:
-                await asyncio.wait_for(cell_mesh.proc_mesh.stop(), timeout=_STOP_TIMEOUT_SECONDS)
-                logger.info(f"Stopped the proc mesh of cell {cell_id}")
-            except Exception as e:
-                logger.warning(f"Failed to stop the proc mesh of cell {cell_id} ({e})")
+            await self._stop_mesh(cell_mesh)
+
+    async def _stop_mesh(self, cell_mesh: _CellMesh) -> None:
+        self._live_meshes = {name: mesh for name, mesh in self._live_meshes.items() if mesh is not cell_mesh}
+        cell_mesh.stopped = True
+        try:
+            await asyncio.wait_for(cell_mesh.proc_mesh.stop(), timeout=_STOP_TIMEOUT_SECONDS)
+            logger.info(f"Stopped the proc mesh of cell {cell_mesh.cell_id}")
+        except Exception as e:
+            logger.warning(f"Failed to stop the proc mesh of cell {cell_mesh.cell_id} ({e})")
 
     def physical_gpu_ids(self, slots: GpuSlotRef) -> list[int]:
         layout_slots = self._layout.slots_of_layout[slots.layout_name]
