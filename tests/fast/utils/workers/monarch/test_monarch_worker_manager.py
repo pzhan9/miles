@@ -23,7 +23,7 @@ from tests.fast.utils.workers.conformance import (
     compute_spec,
 )
 from tests.fast.utils.workers.conftest import worker_manager_args
-from tests.fast.utils.workers.fake_specs import FakeCommandSpec
+from tests.fast.utils.workers.fake_specs import FakeCommandSpec, FakeServeSpec
 
 from miles.utils.workers.monarch.manager import MonarchWorkerManager, create_monarch_backend_capability
 from miles.utils.workers.monarch.runtime import GpuLayoutRequest
@@ -150,3 +150,27 @@ def _pid_of_sleeper() -> int:
         except OSError:
             continue
     raise AssertionError("no sleeper subprocess is running")
+
+
+class TestACellThatCannotStart:
+    def test_a_worker_whose_constructor_raises_fails_the_launch(self):
+        """The failure has to reach the driver, and the half-started mesh must not outlive the attempt."""
+        spec = FakeServeSpec(
+            name="broken",
+            port_infos=[],
+            fixed_scheduling=SchedulingSpec(num_cells=1, num_workers_per_cell=1, num_gpus_per_worker=0),
+            worker_class=f"{__name__}._RaisingWorker",
+        )
+
+        with pytest.raises(Exception, match="cannot be built"):
+            MonarchWorkerManager.launch(
+                worker_manager_args(env_report_interval_seconds=0.0),
+                [spec],
+                comm_backend=WorkerCommBackend.RPC,
+                gpu_layout=_NO_GPUS,
+            )
+
+
+class _RaisingWorker:
+    def __init__(self) -> None:
+        raise RuntimeError("this worker cannot be built")
