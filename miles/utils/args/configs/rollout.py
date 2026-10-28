@@ -102,7 +102,11 @@ class RolloutRelatedConfig(BaseConfig):
         str,
         Arg(
             choices=tuple(backend.value for backend in ObjectStoreBackend),
-            help="Backend of the object store used to pass data (e.g. rollout data) between processes.",
+            help=(
+                "Backend of the object store used to pass data (e.g. rollout data) between processes. Without a "
+                "Ray cluster `ray` is replaced by `mooncake` under kubernetes and by `monarch_rdma` under monarch, "
+                "which hands data over as Monarch RDMA buffers read straight out of the producing process."
+            ),
         ),
     ] = "ray"
     mooncake_store_init_kwargs: A[

@@ -493,8 +493,41 @@ def _compute_custom_inference_engine_provider_path(args: argparse.Namespace) -> 
 _DEPLOY_INSTANCE_ID_PATTERN = re.compile(DNS_LABEL_PATTERN)
 
 
+def _resolve_object_store_of_cluster(args: argparse.Namespace) -> None:
+    cluster_backend = ClusterBackend(args.cluster_backend)
+    requested = ObjectStoreBackend(args.object_store_backend)
+    assert requested is not ObjectStoreBackend.MONARCH_RDMA or cluster_backend is ClusterBackend.MONARCH, (
+        f"--object-store-backend {requested.value} hands data over as monarch rdma buffers, which only processes "
+        f"launched by --cluster-backend {ClusterBackend.MONARCH.value} can create; got --cluster-backend "
+        f"{cluster_backend.value}"
+    )
+    if requested is ObjectStoreBackend.RAY and not cluster_backend.provides_ray_cluster():
+        replacement = _DEFAULT_OBJECT_STORE_WITHOUT_RAY[cluster_backend]
+        logger.info(
+            f"Overriding --object-store-backend {requested.value} with {replacement.value} under "
+            f"--cluster-backend {cluster_backend.value}, which has no Ray object store."
+        )
+        args.object_store_backend = replacement.value
+    if (
+        ObjectStoreBackend(args.object_store_backend) is ObjectStoreBackend.MOONCAKE
+        and not args.mooncake_store_init_kwargs
+        and not cluster_backend.provides_ray_cluster()
+        and DeployComponent(args.deploy_component).deploys_orchestration_script()
+    ):
+        args.mooncake_store_init_kwargs = (
+            compute_mooncake_init_kwargs_vanilla() | compute_mooncake_init_kwargs_from_env()
+        )
+
+
+_DEFAULT_OBJECT_STORE_WITHOUT_RAY = {
+    ClusterBackend.KUBERNETES: ObjectStoreBackend.MOONCAKE,
+    ClusterBackend.MONARCH: ObjectStoreBackend.MONARCH_RDMA,
+}
+
+
 def _resolve_backend_without_ray_cluster(args: argparse.Namespace) -> None:
     cluster_backend = ClusterBackend(args.cluster_backend)
+    _resolve_object_store_of_cluster(args)
     if cluster_backend.provides_ray_cluster():
         return
 
@@ -508,16 +541,6 @@ def _resolve_backend_without_ray_cluster(args: argparse.Namespace) -> None:
     assert (
         args.multi_lora_n_adapters == 0
     ), f"--multi-lora-n-adapters drives RayWorkerManager, which {flag} does not use"
-    if ObjectStoreBackend(args.object_store_backend) != ObjectStoreBackend.MOONCAKE:
-        logger.info(
-            f"Overriding --object-store-backend {args.object_store_backend} with "
-            f"{ObjectStoreBackend.MOONCAKE.value} under {flag}, which has no Ray object store."
-        )
-        args.object_store_backend = ObjectStoreBackend.MOONCAKE.value
-    if not args.mooncake_store_init_kwargs and DeployComponent(args.deploy_component).deploys_orchestration_script():
-        args.mooncake_store_init_kwargs = (
-            compute_mooncake_init_kwargs_vanilla() | compute_mooncake_init_kwargs_from_env()
-        )
 
 
 def _validate_deploy_component(args: argparse.Namespace) -> None:

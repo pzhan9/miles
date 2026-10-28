@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import os
+import pickle
 from abc import ABC, abstractmethod
 from argparse import Namespace
 from collections.abc import Callable
@@ -17,7 +18,7 @@ try:  # ray 2.59 removed the API that force-frees an object pinned by a serializ
     from ray._private.internal_api import free as _ray_free
 except ImportError:
     _ray_free = None
-from pydantic import AfterValidator, ConfigDict, Field, PlainSerializer
+from pydantic import AfterValidator, BeforeValidator, ConfigDict, Field, PlainSerializer
 
 from miles.utils.object_store_config import ObjectStoreBackend as ObjectStoreBackend
 from miles.utils.object_store_config import compute_mooncake_store_config
@@ -94,6 +95,8 @@ def get_instance() -> BaseObjectStore:
 
 def _create_instance(args: Namespace, *, contribute_segment: bool | None) -> BaseObjectStore:
     backend = ObjectStoreBackend(args.object_store_backend)
+    if backend == ObjectStoreBackend.MONARCH_RDMA:
+        return MonarchRdmaObjectStore()
     if backend == ObjectStoreBackend.MOONCAKE:
         if contribute_segment is None:
             contribute_segment = _default_contribute_segment()
@@ -266,4 +269,43 @@ def _field_schemas_for_value(value: Any, value_spec: dict[str, ValueSpec] | None
     }
 
 
-StoreObjectRef = Annotated[_RayStoreObjectRef | _MooncakeStoreObjectRef, Field(discriminator="backend")]
+# ======================= monarch rdma backend ======================
+
+
+def _decode_pickled(payload: Any) -> Any:
+    return pickle.loads(base64.b64decode(payload)) if isinstance(payload, str) else payload
+
+
+def _encode_pickled(payload: Any) -> str:
+    return base64.b64encode(pickle.dumps(payload)).decode()
+
+
+class _MonarchRdmaStoreObjectRef(_BaseStoreObjectRef):
+    backend: Literal[ObjectStoreBackend.MONARCH_RDMA.value] = ObjectStoreBackend.MONARCH_RDMA.value
+
+    # a MonarchRdmaRef (buffer handle + holder actor), pickled so the rpc wire carries it as a string
+    payload: Annotated[Any, BeforeValidator(_decode_pickled), PlainSerializer(_encode_pickled, return_type=str)]
+
+
+class MonarchRdmaObjectStore(BaseObjectStore):
+    """Hands values over as Monarch RDMA buffers; only processes launched by --cluster-backend monarch can use it."""
+
+    def __init__(self) -> None:
+        # torchmonarch is an optional dependency, imported only by runs that pick it
+        from miles.utils.workers.monarch.object_store import MonarchRdmaStore
+
+        self._store = MonarchRdmaStore()
+
+    def put(self, value: Any, value_spec: dict[str, ValueSpec] | None = None) -> StoreObjectRef:
+        return _MonarchRdmaStoreObjectRef(payload=self._store.put(value))
+
+    def get(self, ref: StoreObjectRef) -> ObjectStoreGetResult:
+        return ObjectStoreGetResult(value=self._store.get(ref.payload), release_fn=_release_noop)
+
+    def remove(self, ref: StoreObjectRef) -> None:
+        self._store.remove(ref.payload)
+
+
+StoreObjectRef = Annotated[
+    _RayStoreObjectRef | _MooncakeStoreObjectRef | _MonarchRdmaStoreObjectRef, Field(discriminator="backend")
+]
