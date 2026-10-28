@@ -17,6 +17,7 @@ from miles.utils.ft_utils.health_checker import BaseHealthChecker
 from miles.utils.ft_utils.indep_dp import IndepDPInfo
 from miles.utils.retry_utils import NonRetryableError
 from miles.utils.tracking_utils.structured_log import log_structured
+from miles.utils.workers.cell_handle import BaseCellHandle, GatherCellHandle
 from miles.utils.workers.rpc.client.misc import ServerRestartedError
 from miles.utils.workers.worker_handle import BaseWorkerHandle, WorkerUnreachableError
 from miles.utils.workers.worker_provider.base import BaseWorkerProvider
@@ -57,6 +58,11 @@ class TrainerCell:
         self._master_addr: HostAndPort = worker_infos[0].self_addrs[MASTER_PORT_NAME]
         worker_handles = provider.get_handles_of_worker_infos(worker_infos)
         assert len(worker_handles) == len(worker_infos), f"cell {cell_id} holds workers that cannot be called"
+        # Every call this cell makes reaches all of its workers, in one mesh call where the transport has one.
+        self._cell_worker_handles = [worker_handles[info.name] for info in worker_infos]
+        self._cell_handle: BaseCellHandle = provider.get_cell_handle(
+            cell_id=cell_id, infos=worker_infos, worker_handles=self._cell_worker_handles
+        )
 
         # NOTE: do *NOT* directly modify `self._state`, but instead use `self._change_state`
         self._state: CellState = StateAllocatedUninitialized(worker_handles=list(worker_handles.values()))
@@ -255,10 +261,8 @@ class TrainerCell:
         )
         start = time.monotonic()
         try:
-            result = await self._cancellabel_tasks.gather(
-                (
-                    getattr(handle, fn_name)(**compute_kwargs(i)) for i, handle in enumerate(handles)
-                ),  # config-access-exempt: attribute selected at runtime from fn_name
+            [result] = await self._cancellabel_tasks.gather(
+                [self._cell_handle_of(handles).call_each(fn_name, [compute_kwargs(i) for i in range(len(handles))])],
                 timeout=timeout,
             )
             log_structured(
@@ -320,6 +324,12 @@ class TrainerCell:
     def indep_dp_info(self) -> IndepDPInfo | None:
         assert isinstance(self._state, (StateAllocatedAlive, StateAllocatedErrored))
         return self._state.indep_dp_info
+
+    def _cell_handle_of(self, handles: list[BaseWorkerHandle]) -> BaseCellHandle:
+        same_workers = len(handles) == len(self._cell_worker_handles) and all(
+            mine is theirs for mine, theirs in zip(self._cell_worker_handles, handles, strict=True)
+        )
+        return self._cell_handle if same_workers else GatherCellHandle(handles)
 
     def _get_worker_handles(self) -> list[BaseWorkerHandle]:
         assert isinstance(

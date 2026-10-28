@@ -26,6 +26,7 @@ class ClusterBackend(Enum):
 class WorkerCommBackend(Enum):
     RAY = "ray"
     RPC = "rpc"
+    MONARCH = "monarch"
 
 
 class DeployComponent(Enum):
@@ -85,7 +86,7 @@ class DeploymentIdentity(FrozenStrictBaseModel):
 _SUPPORTED_WORKER_COMM_BACKENDS = {
     ClusterBackend.RAY: (WorkerCommBackend.RAY, WorkerCommBackend.RPC),
     ClusterBackend.KUBERNETES: (WorkerCommBackend.RPC,),
-    ClusterBackend.MONARCH: (WorkerCommBackend.RPC,),
+    ClusterBackend.MONARCH: (WorkerCommBackend.RPC, WorkerCommBackend.MONARCH),
 }
 
 

@@ -3,6 +3,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from miles.utils.pydantic_utils import FrozenStrictBaseModel
+from miles.utils.workers.cell_handle import BaseCellHandle, GatherCellHandle
 from miles.utils.workers.naming import cell_id_of_worker
 from miles.utils.workers.worker_handle import BaseWorkerHandle
 from miles.utils.workers.worker_info import WorkerInfo
@@ -48,6 +49,12 @@ class BaseWorkerProvider(abc.ABC):
 
     def get_handles_of_worker_infos(self, infos: list[WorkerInfo]) -> dict[str, BaseWorkerHandle]:
         return {info.name: handle for info in infos if (handle := self._build_handle_of_worker_info(info)) is not None}
+
+    def get_cell_handle(
+        self, *, cell_id: str, infos: list[WorkerInfo], worker_handles: list[BaseWorkerHandle]
+    ) -> BaseCellHandle:
+        """A handle that calls every worker of one cell at once; ``worker_handles`` are in ``infos`` order."""
+        return GatherCellHandle(worker_handles)
 
     def _build_handle_of_worker_info(self, info: WorkerInfo) -> BaseWorkerHandle | None:
         return build_rpc_handle_of_worker_info(info) if info.worker_class is not None else None

@@ -11,6 +11,7 @@ from monarch.actor import Actor, HostMesh, MeshFailure, endpoint, this_host
 from miles.utils.test_utils.fault_injector.controller import FaultHookCommand
 from miles.utils.test_utils.fault_injector.models import FaultHookRecord, ObservedFaultHookTarget
 from miles.utils.workers.backend_capability.base import BackendCapability
+from miles.utils.workers.cell_handle import BaseCellHandle
 from miles.utils.workers.monarch.hosts import acquire_worker_hosts
 from miles.utils.workers.monarch.runtime import (
     GpuLayoutRequest,
@@ -103,6 +104,10 @@ class MonarchWorkerManager(Actor):
         return self._core.get_actor_handle(worker_name, expected_generation=expected_generation)
 
     @endpoint
+    async def get_cell_native_handle(self, cell_id: str, *, expected_generation: int) -> Any | None:
+        return self._core.get_cell_native_handle(cell_id, expected_generation=expected_generation)
+
+    @endpoint
     async def start_cells(self, cell_ids: list[str]) -> None:
         await self._core.start_cells(cell_ids)
 
@@ -162,11 +167,16 @@ class MonarchWorkerManagerClient(WorkerManagerClient):
         return [self._manager.get_worker_infos.call_one(cell_id).get() for cell_id in cell_ids]
 
     def get_native_handles_blocking(self, infos: list[WorkerInfo]) -> dict[str, BaseWorkerHandle]:
-        assert not infos, (
-            f"{sorted(info.name for info in infos)} are called natively, which --cluster-backend monarch serves only "
-            f"under --worker-comm-backend monarch"
-        )
-        return {}
+        handles = {
+            info.name: self._manager.get_actor_handle.call_one(info.name, expected_generation=info.generation).get()
+            for info in infos
+        }
+        not_served = sorted(name for name, handle in handles.items() if not isinstance(handle, BaseWorkerHandle))
+        assert not not_served, f"{not_served} are launched as commands, which have no methods to call"
+        return handles
+
+    def get_native_cell_handle_blocking(self, cell_id: str, *, generation: int) -> BaseCellHandle | None:
+        return self._manager.get_cell_native_handle.call_one(cell_id, expected_generation=generation).get()
 
 
 def create_monarch_backend_capability(manager: Any) -> BackendCapability:
