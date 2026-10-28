@@ -16,6 +16,7 @@ _MISSING = object()
 class ObjectStoreBackend(Enum):
     RAY = "ray"
     MOONCAKE = "mooncake"
+    MONARCH_RDMA = "monarch_rdma"
 
 
 def compute_mooncake_init_kwargs_vanilla(*, host: str = "127.0.0.1", master_port: int = MOONCAKE_MASTER_PORT) -> dict:

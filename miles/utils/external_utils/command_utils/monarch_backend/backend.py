@@ -8,6 +8,9 @@ from miles.utils.external_utils.command_utils.base_backend import (
     LaunchGuard,
 )
 from miles.utils.external_utils.command_utils.common import (
+    MOONCAKE_BACKEND_NAME,
+    OBJECT_STORE_BACKEND_FLAG,
+    ArgvManipulator,
     _pythonpath_with_sources,
     get_mooncake_master_port,
     run_shell_command,
@@ -39,10 +42,12 @@ class MonarchCommandBackend(BaseCommandBackend):
         master_addr = os.environ.get("MASTER_ADDR", "127.0.0.1")
 
         self._clean_up_previous_run()
-        if not config.external_mooncake:
-            start_mooncake_master(
-                rpc_port=get_mooncake_master_port(shlex.split(request.train_args)), run_command=self.exec_command_cpu
-            )
+        train_argv = shlex.split(request.train_args)
+        # a monarch run hands data over as rdma buffers unless it asks for mooncake
+        if ArgvManipulator.get_effective(train_argv, OBJECT_STORE_BACKEND_FLAG) == MOONCAKE_BACKEND_NAME and not (
+            config.external_mooncake
+        ):
+            start_mooncake_master(rpc_port=get_mooncake_master_port(train_argv), run_command=self.exec_command_cpu)
         for cmd in request.prepare_cmd.values():
             self.exec_command_multi_node(cmd)
         if (f := request.before_ray_job_submit) is not None:
