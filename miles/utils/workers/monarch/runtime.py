@@ -23,6 +23,7 @@ from monarch.actor import Actor, HostMesh, ProcMesh, concurrent_endpoint, curren
 from miles.utils.misc import VISIBLE_DEVICES_ENV_VARS, get_current_node_ip, visible_devices
 from miles.utils.workers.backend_capability.base import BackendCapability
 from miles.utils.workers.env_vars import WORKER_GPU_IDS_ENV_VAR
+from miles.utils.workers.monarch.env_vars import MONARCH_RUN_ENV_VARS_ENV_VAR
 from miles.utils.workers.monarch.handles import (
     MonarchCellHandle,
     MonarchWorkerHandle,
@@ -110,9 +111,12 @@ def visible_gpu_ids() -> list[int]:
     return sorted(int(index) for index in devices if index.isdigit())
 
 
-async def probe_hosts(worker_hosts: HostMesh) -> list[ProbedHost]:
-    """Every host's address and visible gpus, in mesh order."""
-    probe_procs = worker_hosts.spawn_procs(per_host={_PROCS_DIM: 1}, name="miles-node-probe")
+async def probe_hosts(worker_hosts: HostMesh, *, run_env: dict[str, str]) -> list[ProbedHost]:
+    """Every host's address and visible gpus, in mesh order, seen from the environment its gpu workers get."""
+    probe_command = default_bootstrap_cmd().with_env(run_env)
+    probe_procs = worker_hosts.spawn_procs(
+        per_host={_PROCS_DIM: 1}, name="miles-node-probe", bootstrap_command=lambda point: probe_command
+    )
     try:
         probes = probe_procs.spawn("miles-node-probe", MonarchNodeProbe)
         answers = await probes.probe.call()
@@ -199,6 +203,7 @@ class MonarchWorkerRuntime(WorkerRuntime):
         layout: MonarchGpuLayout,
         manager: Any,
         capability_factory: Callable[[], BackendCapability],
+        run_env: dict[str, str],
     ) -> None:
         self._head_host = head_host
         self._worker_hosts = worker_hosts
@@ -206,6 +211,7 @@ class MonarchWorkerRuntime(WorkerRuntime):
         self._manager = manager
         self._capability_factory = capability_factory
         self._mesh_counter = itertools.count()
+        self._run_env = run_env
 
     async def launch_cell(self, *, cell_id: str, launches: list[WorkerLaunch]) -> list[WorkerProcess]:
         host_mesh, host_ranks, procs_per_host = self._place(launches)
@@ -219,6 +225,7 @@ class MonarchWorkerRuntime(WorkerRuntime):
         envs = [
             _compute_env(
                 launch,
+                run_env=self._run_env,
                 gpu_ids=None if launch.gpu_slots is None else self.physical_gpu_ids(launch.gpu_slots),
             )
             for launch in launches
@@ -284,14 +291,20 @@ class MonarchWorkerRuntime(WorkerRuntime):
         return self._worker_hosts, host_ranks, procs_per_host
 
 
-def _compute_env(launch: WorkerLaunch, *, gpu_ids: list[int] | None) -> dict[str, str | None]:
+def _compute_env(launch: WorkerLaunch, *, run_env: dict[str, str], gpu_ids: list[int] | None) -> dict[str, str | None]:
     if gpu_ids is None:
         # Ray hides every gpu from a worker it gives none
         gpus = dict.fromkeys(VISIBLE_DEVICES_ENV_VARS, "")
     else:
         # a gpu worker keeps the whole host it inherits, as under Ray, and learns which devices are its own
         gpus = {WORKER_GPU_IDS_ENV_VAR: ",".join(str(gpu_id) for gpu_id in gpu_ids)}
-    return {**launch.env_vars, **gpus}
+    return {**run_env, **launch.env_vars, **gpus}
+
+
+def read_run_env() -> dict[str, str]:
+    """The variables the launcher exported to this driver, which every worker it spawns gets too."""
+    names = os.environ.get(MONARCH_RUN_ENV_VARS_ENV_VAR, "")
+    return {name: os.environ[name] for name in names.split(",") if name and name in os.environ}
 
 
 async def _stop_proc_mesh(proc_mesh: ProcMesh, *, mesh_name: str) -> None:

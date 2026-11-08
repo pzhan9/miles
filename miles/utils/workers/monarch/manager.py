@@ -11,6 +11,7 @@ from miles.utils.test_utils.fault_injector.controller import FaultHookCommand
 from miles.utils.test_utils.fault_injector.models import FaultHookRecord, ObservedFaultHookTarget
 from miles.utils.workers.backend_capability.base import BackendCapability
 from miles.utils.workers.monarch.handles import call_endpoint, get_endpoint
+from miles.utils.workers.monarch.hosts import acquire_worker_hosts, check_mooncake_master_reaches_every_host
 from miles.utils.workers.monarch.runtime import (
     GpuLayoutRequest,
     MonarchWorkerRuntime,
@@ -18,6 +19,7 @@ from miles.utils.workers.monarch.runtime import (
     install_manager_handle,
     installed_manager_handle,
     probe_hosts,
+    read_run_env,
 )
 from miles.utils.workers.types import WorkerCommBackend
 from miles.utils.workers.worker_handle import BaseWorkerHandle
@@ -40,7 +42,15 @@ class MonarchWorkerManager(Actor):
     @staticmethod
     def launch(args, specs: list[BaseSpec], *, comm_backend: WorkerCommBackend, gpu_layout: GpuLayoutRequest) -> Any:
         """Spawn the manager in a process of its own on the driver's host, and start every cell."""
+        # Attach before this_host() starts this process's runtime: loading a job's state sets the transport the
+        # job's hosts reply on, and a runtime already serving on a node-local socket never hears their replies.
+        worker_hosts = acquire_worker_hosts()
+        if worker_hosts is not None:
+            check_mooncake_master_reaches_every_host(
+                args.mooncake_store_init_kwargs, num_hosts=worker_hosts.extent.nelements
+            )
         head_host = this_host()
+        worker_hosts = worker_hosts or head_host
         manager_procs = head_host.spawn_procs(per_host={"procs": 1}, name=_MANAGER_NAME)
         manager = manager_procs.spawn(_MANAGER_NAME, MonarchWorkerManager)
         install_manager_handle(manager)
@@ -51,8 +61,9 @@ class MonarchWorkerManager(Actor):
                 comm_backend=comm_backend,
                 gpu_layout=gpu_layout,
                 head_host=head_host,
-                worker_hosts=head_host,
+                worker_hosts=worker_hosts,
                 manager=manager,
+                run_env=read_run_env(),
             ).get()
         except BaseException:
             # nobody is handed a manager that failed to start, so nobody else would stop its process
@@ -71,9 +82,10 @@ class MonarchWorkerManager(Actor):
         head_host: HostMesh,
         worker_hosts: HostMesh,
         manager: Any,
+        run_env: dict[str, str],
     ) -> None:
         install_manager_handle(manager)
-        hosts = await probe_hosts(worker_hosts)
+        hosts = await probe_hosts(worker_hosts, run_env=run_env)
         layout = compute_monarch_gpu_layout(request=gpu_layout, hosts=hosts)
         logger.info(f"Monarch hosts {hosts} lay out {gpu_layout.num_gpus} gpus as {layout}")
         self._runtime = MonarchWorkerRuntime(
@@ -82,6 +94,7 @@ class MonarchWorkerManager(Actor):
             layout=layout,
             manager=manager,
             capability_factory=installed_monarch_backend_capability,
+            run_env=run_env,
         )
         await self._core.init_pools(args, specs, runtime=self._runtime, comm_backend=comm_backend)
 
