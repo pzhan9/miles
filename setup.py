@@ -52,6 +52,10 @@ setup(
         "novita": [
             "novita-sandbox>=2.0.7",
         ],
+        # --cluster-backend monarch, imported only by runs that pick it
+        "monarch": [
+            "torchmonarch",
+        ],
     },
     # sglang needs 3.11; nvidia-resiliency-ext 0.6 has no 3.13 wheel
     python_requires=">=3.11",
